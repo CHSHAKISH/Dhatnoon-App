@@ -1,9 +1,12 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:dhatnoon_app/services/signaling_service.dart';
+import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart'; // <-- THIS LINE WAS MISSING
+import 'package:dhatnoon_app/services/supabase_storage_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
+import 'package:dhatnoon_app/services/signaling_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:location/location.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -24,25 +27,23 @@ class ActiveTicketScreen extends StatefulWidget {
 class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
   final TicketService _ticketService = TicketService();
   final SignalingService _signalingService = SignalingService();
+  final SupabaseStorageService _supabaseStorage = SupabaseStorageService();
 
-  // --- Location variables ---
+  // --- State Variables ---
   final Location _location = Location();
   StreamSubscription<LocationData>? _locationSubscription;
   bool _isLocationSharing = false;
-
-  // --- WebRTC variables ---
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   bool _isStreaming = false;
   StreamSubscription? _sessionSub;
   StreamSubscription? _candidateSub;
-  // ---
+  bool _isUploading = false;
 
-  // Standard STUN server configuration
   final Map<String, dynamic> _iceConfig = {
     'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'}
+      {'urls': 'stun:stun.l.google.com:19302'},
     ]
   };
 
@@ -50,14 +51,12 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
   void initState() {
     super.initState();
     if (widget.requestType == 'video_stream') {
-      // Initialize the video renderer
       _localRenderer.initialize();
     }
   }
 
   @override
   void dispose() {
-    // Clean up all resources
     _locationSubscription?.cancel();
     _sessionSub?.cancel();
     _candidateSub?.cancel();
@@ -68,87 +67,121 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
     super.dispose();
   }
 
-  // --- Image Sample (Placeholder) ---
+  // --- (IMPLEMENTED) Image Sample ---
   Future<void> _handleImageSample() async {
+    // 1. Check permissions
+    var status = await Permission.camera.request();
+    if (status.isDenied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera permission is required.')),
+      );
+      return;
+    }
+
+    // 2. Open camera
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(source: ImageSource.camera);
+
+    if (image != null) {
+      setState(() {
+        _isUploading = true;
+      });
+
+      File imageFile = File(image.path);
+
+      // 3. Upload to Supabase Storage
+      String? downloadUrl = await _supabaseStorage.uploadTicketMedia(
+        widget.ticketId,
+        imageFile,
+      );
+
+      // 4. Update Firestore with Supabase URL
+      if (downloadUrl != null) {
+        await _ticketService.completeTicketWithMedia(
+          widget.ticketId,
+          downloadUrl,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Image uploaded successfully!')),
+          );
+          Navigator.pop(context); // Go back to the dashboard
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error uploading image.')),
+        );
+      }
+
+      if (mounted)
+        setState(() {
+          _isUploading = false;
+        });
+    }
+  }
+
+  // --- (Skipped Feature) Location Sharing ---
+  Future<void> _startLocationSharing() async {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Storage not configured. Feature unavailable.'),
+        content: Text('Maps API not configured. Feature unavailable.'),
         backgroundColor: Colors.red,
       ),
     );
   }
 
-  // --- Location Sharing (from Step 4) ---
-  Future<void> _startLocationSharing() async {
-    var status = await Permission.location.request();
-    if (status.isDenied) return;
-
-    await _location.changeSettings(accuracy: LocationAccuracy.high);
-    _locationSubscription =
-        _location.onLocationChanged.listen((LocationData newLocation) {
-          _ticketService.updateSenderLocation(widget.ticketId, newLocation);
-        });
-    setState(() { _isLocationSharing = true; });
-  }
-
   Future<void> _stopLocationSharing() async {
-    _locationSubscription?.cancel();
-    await _ticketService.completeTicket(widget.ticketId);
-    setState(() { _isLocationSharing = false; });
-    if (mounted) Navigator.pop(context);
+    // This is just a placeholder
   }
 
-  // --- NEW: Video Streaming Functions ---
+  // --- (Buggy Feature) Video Streaming ---
   Future<void> _startVideoStream() async {
-    // 1. Request permissions
     await [Permission.camera, Permission.microphone].request();
-
-    // 2. Initialize WebRTC
-    _peerConnection = await createPeerConnection(_iceConfig);
-
-    // 3. Get camera/mic stream
-    _localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
-      'video': {'facingMode': 'user'} // 'user' for front, 'environment' for back
+    _peerConnection = await createPeerConnection({
+      ..._iceConfig,
+      'sdpSemantics': 'unified-plan',
     });
 
-    // 4. Show local video
-    _localRenderer.srcObject = _localStream;
+    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
+      print('SENDER: ICE Connection State: $state');
+    };
+    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+      print('SENDER: Got ICE candidate: ${candidate.candidate}');
+      _signalingService.addCandidate(widget.ticketId, candidate, false);
+    };
 
-    // 5. Add local stream to the peer connection
+    _localStream = await navigator.mediaDevices.getUserMedia(
+        {'audio': true, 'video': {'facingMode': 'environment'}});
+    _localRenderer.srcObject = _localStream;
     _localStream?.getTracks().forEach((track) {
       _peerConnection?.addTrack(track, _localStream!);
     });
 
-    // 6. Listen for ICE candidates
-    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      _signalingService.addCandidate(widget.ticketId, candidate, false); // false = isNotRequester
-    };
-
-    // 7. Create an offer
     RTCSessionDescription offer = await _peerConnection!.createOffer();
     await _peerConnection!.setLocalDescription(offer);
-
-    // 8. Save offer to Firestore
     await _signalingService.createOffer(widget.ticketId, offer);
 
-    // 9. Listen for the answer from the Requester
-    _sessionSub = _signalingService.getSessionStream(widget.ticketId).listen((doc) async {
-      if (doc.exists) {
-        var data = doc.data() as Map<String, dynamic>;
-        if (data['answer'] != null) {
-          var answer = RTCSessionDescription(
-            data['answer']['sdp'],
-            data['answer']['type'],
-          );
-          await _peerConnection?.setRemoteDescription(answer);
-        }
-      }
-    });
+    _sessionSub =
+        _signalingService.getSessionStream(widget.ticketId).listen((doc) async {
+          if (doc.exists) {
+            var data = doc.data() as Map<String, dynamic>;
+            if (data['answer'] != null &&
+                _peerConnection?.getRemoteDescription() == null) {
+              var answer = RTCSessionDescription(
+                data['answer']['sdp'],
+                data['answer']['type'],
+              );
+              print('SENDER: Got answer, setting remote description...');
+              await _peerConnection?.setRemoteDescription(answer);
+            }
+          }
+        });
 
-    // 10. Listen for ICE candidates from the Requester
-    _candidateSub = _signalingService.getCandidateStream(widget.ticketId, false).listen((snapshot) {
+    _candidateSub = _signalingService
+        .getCandidateStream(widget.ticketId, false)
+        .listen((snapshot) {
       for (var change in snapshot.docChanges) {
+        // This is where the error was
         if (change.type == DocumentChangeType.added) {
           var data = change.doc.data() as Map<String, dynamic>;
           _peerConnection?.addCandidate(RTCIceCandidate(
@@ -160,70 +193,67 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
       }
     });
 
-    setState(() { _isStreaming = true; });
+    setState(() {
+      _isStreaming = true;
+    });
   }
 
   Future<void> _stopVideoStream() async {
-    // 1. Clean up all streams and connections
     _localStream?.getTracks().forEach((track) => track.stop());
     await _localStream?.dispose();
     await _peerConnection?.close();
     await _peerConnection?.dispose();
     _sessionSub?.cancel();
     _candidateSub?.cancel();
-
-    // 2. Mark ticket as complete
     await _ticketService.completeTicket(widget.ticketId);
-    setState(() { _isStreaming = false; });
+    setState(() {
+      _isStreaming = false;
+    });
     if (mounted) Navigator.pop(context);
   }
-  // --- End of new functions ---
 
   // --- Main Build Function ---
   Widget _buildTaskWidget() {
     switch (widget.requestType) {
       case 'image_sample':
-        return ElevatedButton.icon(
+      // Show loading indicator or the button
+        return _isUploading
+            ? const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 20),
+            Text('Uploading image...'),
+          ],
+        )
+            : ElevatedButton.icon(
           icon: const Icon(Icons.camera_alt),
           label: const Text('Open Camera'),
           onPressed: _handleImageSample,
         );
 
       case 'location':
-      // This is our placeholder from Step 4
+      // ... (Location button code remains the same)
         return Column(
           children: [
             ElevatedButton.icon(
               icon: Icon(_isLocationSharing ? Icons.stop : Icons.play_arrow),
-              label: Text(_isLocationSharing ? 'Stop Sharing' : 'Start Sharing Location (Not Configured)'),
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Maps API not configured. Feature unavailable.'),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              },
+              label: Text(_isLocationSharing
+                  ? 'Stop Sharing'
+                  : 'Start Sharing Location (Not Configured)'),
+              onPressed: _isLocationSharing
+                  ? _stopLocationSharing
+                  : _startLocationSharing,
             ),
-            if (_isLocationSharing)
-              const Padding(
-                padding: EdgeInsets.only(top: 20),
-                child: Text(
-                  'Now sharing your location live...',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.green),
-                ),
-              ),
           ],
         );
 
-    // --- UPDATED CASE for Video ---
       case 'video_stream':
+      // ... (Video stream code remains the same)
         return Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // This view shows the Sender their own camera
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
@@ -246,7 +276,6 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
             ),
           ],
         );
-    // --- End of update ---
 
       default:
         return const Text('Unknown request type');

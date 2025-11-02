@@ -47,6 +47,8 @@ dependencies:
   firebase_messaging: ^16.0.3
   flutter_local_notifications: ^19.5.0
   get_it: ^8.3.0
+  supabase_flutter: ^2.10.3
+  flutter_dotenv: ^6.0.0
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +71,8 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - .env
 
   # To add assets to your application, add an assets section, like this:
   # assets:

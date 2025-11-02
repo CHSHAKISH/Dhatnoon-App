@@ -63,7 +63,7 @@ class TicketService {
   Future<void> completeTicketWithMedia(String ticketId, String mediaUrl) async {
     await _ticketsCollection.doc(ticketId).update({
       'status': 'completed',
-      'mediaUrl': mediaUrl,
+      'mediaUrl': mediaUrl, // Add the new media URL field
     });
   }
 

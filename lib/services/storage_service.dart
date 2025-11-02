@@ -1,5 +1,5 @@
-import 'dart.io'; // Make sure to import 'dart:io' for the 'File' type
-import 'package.firebase_storage/firebase_storage.dart';
+import 'dart:io'; // Make sure to import 'dart:io' for the 'File' type
+import 'package:firebase_storage/firebase_storage.dart';
 
 class StorageService {
   final FirebaseStorage _storage = FirebaseStorage.instance;

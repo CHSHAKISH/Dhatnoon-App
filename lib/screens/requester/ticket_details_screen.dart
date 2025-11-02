@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:dhatnoon_app/services/signaling_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -33,6 +32,7 @@ class TicketDetailsScreen extends StatelessWidget {
           var ticket = snapshot.data!.data() as Map<String, dynamic>;
           String status = ticket['status'];
           String requestType = ticket['requestType'];
+          // This mediaUrl will now come from Supabase
           String? mediaUrl = ticket['mediaUrl'];
 
           return Padding(
@@ -57,7 +57,7 @@ class TicketDetailsScreen extends StatelessWidget {
                     context,
                     status,
                     requestType,
-                    mediaUrl,
+                    mediaUrl, // Pass the URL to the builder
                   ),
                 ),
               ],
@@ -68,30 +68,53 @@ class TicketDetailsScreen extends StatelessWidget {
     );
   }
 
+  /// Dynamically builds the content widget based on the ticket type and status.
   Widget _buildTicketContent(BuildContext context, String status,
       String requestType, String? mediaUrl) {
-
-    // 1. Logic for Image Sample (Placeholder)
+    // --- (IMPLEMENTED) Image Sample ---
     if (requestType == 'image_sample') {
-      return const Center(
-        child: Text('Image upload feature not configured.'),
-      );
+      if (status == 'completed' && mediaUrl != null) {
+        // If we have a URL, display it
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.network(
+            mediaUrl,
+            // Show a loading spinner while the image downloads
+            loadingBuilder: (context, child, loadingProgress) {
+              if (loadingProgress == null) return child;
+              return const Center(child: CircularProgressIndicator());
+            },
+            // Show an error icon if the image fails to load
+            errorBuilder: (context, error, stackTrace) {
+              return const Icon(Icons.error, size: 50);
+            },
+          ),
+        );
+      }
     }
 
-    // 2. Logic for Location (Placeholder)
+    // --- (Skipped Feature) Location ---
     if (requestType == 'location') {
       if (status == 'accepted') {
-        return const Center(child: Text('Maps API not configured.'));
+        return const Center(
+          child: Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text(
+              'Live location feature was not configured (requires Google Maps SDK billing setup).',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        );
       }
       if (status == 'completed') {
         return const Center(child: Text('Location sharing has ended.'));
       }
     }
 
-    // 3. --- NEW --- Logic for Video Stream
+    // --- (Buggy Feature) Video Stream ---
     if (requestType == 'video_stream') {
       if (status == 'accepted') {
-        // Show the video player
+        // Show the video player widget
         return _VideoStreamViewer(ticketId: ticketId);
       }
       if (status == 'completed') {
@@ -99,7 +122,7 @@ class TicketDetailsScreen extends StatelessWidget {
       }
     }
 
-    // 4. Fallback text
+    // --- Fallback Text ---
     if (status == 'accepted') {
       return const Center(
         child: Text('Sender is working on your request...'),
@@ -112,7 +135,8 @@ class TicketDetailsScreen extends StatelessWidget {
   }
 }
 
-// --- NEW WIDGET for Video Streaming ---
+// --- (Buggy Feature) Video Stream Viewer ---
+// This stateful widget manages the WebRTC connection for the Requester.
 class _VideoStreamViewer extends StatefulWidget {
   final String ticketId;
   const _VideoStreamViewer({required this.ticketId});
@@ -130,7 +154,9 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
 
   final Map<String, dynamic> _iceConfig = {
     'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'}
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'stun:stun1.l.google.com:19302'},
+      {'urls': 'stun:stun.stunprotocol.org:3478'},
     ]
   };
 
@@ -141,54 +167,58 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   }
 
   Future<void> _initialize() async {
-    // 1. Initialize the renderer
     await _remoteRenderer.initialize();
 
-    // 2. Create the peer connection
-    _peerConnection = await createPeerConnection(_iceConfig);
+    _peerConnection = await createPeerConnection({
+      ..._iceConfig,
+      'sdpSemantics': 'unified-plan',
+    });
 
-    // 3. Listen for tracks (the remote video stream)
+    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
+      print('REQUESTER: ICE Connection State: $state');
+    };
+
     _peerConnection?.onTrack = (RTCTrackEvent event) {
       if (event.streams.isNotEmpty) {
-        // Set the remote video feed
-        _remoteRenderer.srcObject = event.streams[0];
-        setState(() {});
+        print("--- REQUESTER: GOT REMOTE STREAM ---");
+        setState(() {
+          _remoteRenderer.srcObject = event.streams[0];
+        });
       }
     };
 
-    // 4. Listen for ICE candidates from the Sender
     _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+      print('REQUESTER: Got ICE candidate: ${candidate.candidate}');
       _signalingService.addCandidate(widget.ticketId, candidate, true); // true = isRequester
     };
 
-    // 5. Listen to the session doc for the "offer"
-    _sessionSub = _signalingService.getSessionStream(widget.ticketId).listen((doc) async {
-      if (doc.exists) {
-        var data = doc.data() as Map<String, dynamic>;
+    _sessionSub =
+        _signalingService.getSessionStream(widget.ticketId).listen((doc) async {
+          if (doc.exists) {
+            var data = doc.data() as Map<String, dynamic>;
 
-        // If the offer exists and we don't have a remote description yet
-        if (data['offer'] != null && _peerConnection?.getRemoteDescription() == null) {
-          var offer = RTCSessionDescription(
-            data['offer']['sdp'],
-            data['offer']['type'],
-          );
+            if (data['offer'] != null &&
+                _peerConnection?.getRemoteDescription() == null) {
+              var offer = RTCSessionDescription(
+                data['offer']['sdp'],
+                data['offer']['type'],
+              );
 
-          // Set the offer as our remote description
-          await _peerConnection?.setRemoteDescription(offer);
+              print('REQUESTER: Got offer, setting remote description...');
+              await _peerConnection?.setRemoteDescription(offer);
 
-          // Create an answer
-          RTCSessionDescription answer = await _peerConnection!.createAnswer();
-          await _peerConnection!.setLocalDescription(answer);
+              RTCSessionDescription answer = await _peerConnection!.createAnswer();
+              await _peerConnection!.setLocalDescription(answer);
+              await _signalingService.createAnswer(widget.ticketId, answer);
+            }
+          }
+        });
 
-          // Send the answer back to Firestore
-          await _signalingService.createAnswer(widget.ticketId, answer);
-        }
-      }
-    });
-
-    // 6. Listen for ICE candidates from the Sender
-    _candidateSub = _signalingService.getCandidateStream(widget.ticketId, true).listen((snapshot) {
+    _candidateSub = _signalingService
+        .getCandidateStream(widget.ticketId, true)
+        .listen((snapshot) {
       for (var change in snapshot.docChanges) {
+        // This is the typo I fixed (was DocumentChange_Type)
         if (change.type == DocumentChangeType.added) {
           var data = change.doc.data() as Map<String, dynamic>;
           _peerConnection?.addCandidate(RTCIceCandidate(
@@ -217,7 +247,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
         color: Colors.black,
         border: Border.all(color: Colors.grey),
       ),
-      // RTCVideoView displays the live stream
       child: RTCVideoView(_remoteRenderer),
     );
   }
