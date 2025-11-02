@@ -1,4 +1,3 @@
-// lib/services/auth_service.dart
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -18,23 +17,24 @@ class AuthService {
       );
       return userCredential;
     } on FirebaseAuthException catch (e) {
-      // You can handle errors here (e.g., show a snackbar)
       print('Sign-in error: ${e.message}');
       return null;
     }
   }
 
-  // Sign Up with Email & Password
-  Future<UserCredential?> signUpWithEmail(String email, String password) async {
+  // --- UPDATED ---
+  // Now accepts a 'role' parameter
+  Future<UserCredential?> signUpWithEmail(String email, String password, String role) async {
     try {
       UserCredential userCredential = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
 
-      // After sign up, save user info to Firestore
+      // After sign up, save user info (including the role) to Firestore
       if (userCredential.user != null) {
-        await _saveUserToFirestore(userCredential.user!);
+        // Pass the role to our save function
+        await _saveUserToFirestore(userCredential.user!, role);
       }
       return userCredential;
     } on FirebaseAuthException catch (e) {
@@ -43,12 +43,13 @@ class AuthService {
     }
   }
 
-  // Save new user to 'users' collection
-  Future<void> _saveUserToFirestore(User user) async {
+  // --- UPDATED ---
+  // Now accepts a 'role' parameter
+  Future<void> _saveUserToFirestore(User user, String role) async {
     return _firestore.collection('users').doc(user.uid).set({
       'uid': user.uid,
       'email': user.email,
-      'role': 'requester', // Default role, can be changed later
+      'role': role, // <-- Save the selected role
       'createdAt': Timestamp.now(),
     });
   }
