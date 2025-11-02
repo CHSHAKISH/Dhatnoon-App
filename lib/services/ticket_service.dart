@@ -1,4 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // <-- CORRECTED
 import 'package:firebase_auth/firebase_auth.dart';
 
 class TicketService {
@@ -31,7 +31,7 @@ class TicketService {
     return _ticketsCollection
         .where('requesterId', isEqualTo: currentUser!.uid)
         .orderBy('createdAt', descending: true)
-        .snapshots(); // This returns a real-time stream
+        .snapshots();
   }
 
   // READ: Get a stream of all open tickets for any sender
@@ -51,6 +51,14 @@ class TicketService {
       'senderId': currentUser.uid,
       'senderEmail': currentUser.email,
       'status': 'accepted',
+    });
+  }
+
+  // UPDATE: Mark ticket as complete with the media URL
+  Future<void> completeTicketWithMedia(String ticketId, String mediaUrl) async {
+    await _ticketsCollection.doc(ticketId).update({
+      'status': 'completed',
+      'mediaUrl': mediaUrl, // Add the new media URL field
     });
   }
 }

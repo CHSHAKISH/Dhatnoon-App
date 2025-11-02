@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
 import 'package:flutter/material.dart';
+// Make sure this file exists at this path
+import 'package:dhatnoon_app/screens/requester/ticket_details_screen.dart'; // <-- CORRECTED
 
 class MyTicketsScreen extends StatelessWidget {
   const MyTicketsScreen({super.key});
@@ -46,21 +48,25 @@ class MyTicketsScreen extends StatelessWidget {
             itemCount: tickets.length,
             itemBuilder: (context, index) {
               var ticket = tickets[index].data() as Map<String, dynamic>;
+              String ticketId = tickets[index].id; // Get the ticket ID
+
               return Card(
                 margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: ListTile(
                   leading: Icon(_getIconForType(ticket['requestType'])),
-                  title: Text(ticket['requestType'].replaceAll('_', ' ').toUpperCase()),
+                  title:
+                  Text(ticket['requestType'].replaceAll('_', ' ').toUpperCase()),
                   subtitle: Text('Status: ${ticket['status']}'),
-                  trailing: Text(
-                    ticket['status'] == 'accepted'
-                        ? 'Accepted by:\n${ticket['senderEmail']}'
-                        : 'Pending',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      color: ticket['status'] == 'accepted' ? Colors.green : Colors.orange,
-                    ),
-                  ),
+                  trailing: const Icon(Icons.chevron_right), // Add a tap indicator
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            TicketDetailsScreen(ticketId: ticketId),
+                      ),
+                    );
+                  },
                 ),
               );
             },

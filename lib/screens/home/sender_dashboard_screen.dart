@@ -1,7 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:dhatnoon_app/services/auth_service.dart'; // Import AuthService
+import 'package:dhatnoon_app/services/auth_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
 import 'package:flutter/material.dart';
+import 'package:dhatnoon_app/screens/sender/active_ticket_screen.dart'; // <-- CORRECTED
 
 class SenderDashboardScreen extends StatelessWidget {
   const SenderDashboardScreen({super.key});
@@ -23,11 +24,9 @@ class SenderDashboardScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final TicketService ticketService = TicketService();
-    // --- NEW ---
     final AuthService authService = AuthService();
 
     return Scaffold(
-      // --- NEW APPBAR ---
       appBar: AppBar(
         title: const Text('Sender Dashboard'),
         actions: [
@@ -40,7 +39,6 @@ class SenderDashboardScreen extends StatelessWidget {
           )
         ],
       ),
-      // --- END OF NEW APPBAR ---
       body: StreamBuilder<QuerySnapshot>(
         stream: ticketService.getOpenTickets(),
         builder: (context, snapshot) {
@@ -61,17 +59,31 @@ class SenderDashboardScreen extends StatelessWidget {
             itemBuilder: (context, index) {
               var ticket = tickets[index].data() as Map<String, dynamic>;
               String ticketId = tickets[index].id;
+              String requestType = ticket['requestType']; // Get the request type
 
               return Card(
                 margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: ListTile(
-                  leading: Icon(_getIconForType(ticket['requestType'])),
-                  title: Text(ticket['requestType'].replaceAll('_', ' ').toUpperCase()),
+                  leading: Icon(_getIconForType(requestType)),
+                  title:
+                  Text(requestType.replaceAll('_', ' ').toUpperCase()),
                   subtitle: Text('From: ${ticket['requesterEmail']}'),
                   trailing: ElevatedButton(
                     child: const Text('Accept'),
                     onPressed: () {
+                      // 1. Accept the ticket in Firestore (this still works)
                       ticketService.acceptTicket(ticketId);
+
+                      // 2. Navigate to the new screen to fulfill the request
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ActiveTicketScreen(
+                            ticketId: ticketId,
+                            requestType: requestType,
+                          ),
+                        ),
+                      );
                     },
                   ),
                 ),

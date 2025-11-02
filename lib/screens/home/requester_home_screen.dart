@@ -1,7 +1,7 @@
 import 'package:dhatnoon_app/services/auth_service.dart'; // Import AuthService
 import 'package:flutter/material.dart';
-import '../tickets/create_ticket_screen.dart';
-import '../tickets/my_tickets_screen.dart';
+import '../requester//create_ticket_screen.dart';
+import '../requester/my_tickets_screen.dart';
 
 class RequesterHomeScreen extends StatelessWidget {
   const RequesterHomeScreen({super.key});
