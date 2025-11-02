@@ -69,4 +69,4 @@ build/
 /ios/Runner.xcodeproj/project.xcworkspace/
 /ios/Runner.xcodeproj/xcuserdata/
 
-
+/android/app/google-services.json
