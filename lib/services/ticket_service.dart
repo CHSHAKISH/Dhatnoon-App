@@ -79,9 +79,6 @@ class TicketService {
 
   // --- NEW FUNCTION (for Location, from skipped Step 4) ---
   // Get a stream of the live session data for the requester
-  Stream<DocumentSnapshot> getSessionStream(String ticketId) {
-    return _sessionsCollection.doc(ticketId).snapshots();
-  }
 
   // --- NEW FUNCTION (for Location/Video, from skipped Step 4) ---
   Future<void> completeTicket(String ticketId) async {

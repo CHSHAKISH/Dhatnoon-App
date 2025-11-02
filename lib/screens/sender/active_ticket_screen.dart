@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:cloud_firestore/cloud_firestore.dart'; // <-- THIS LINE WAS MISSING
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:dhatnoon_app/services/location_service.dart'; // <-- NEW
 import 'package:dhatnoon_app/services/supabase_storage_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
 import 'package:dhatnoon_app/services/signaling_service.dart';
@@ -28,6 +29,7 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
   final TicketService _ticketService = TicketService();
   final SignalingService _signalingService = SignalingService();
   final SupabaseStorageService _supabaseStorage = SupabaseStorageService();
+  final LocationService _locationService = LocationService(); // <-- NEW
 
   // --- State Variables ---
   final Location _location = Location();
@@ -67,9 +69,8 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
     super.dispose();
   }
 
-  // --- (IMPLEMENTED) Image Sample ---
+  // --- (Implemented) Image Sample ---
   Future<void> _handleImageSample() async {
-    // 1. Check permissions
     var status = await Permission.camera.request();
     if (status.isDenied) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -77,25 +78,15 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
       );
       return;
     }
-
-    // 2. Open camera
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.camera);
-
     if (image != null) {
-      setState(() {
-        _isUploading = true;
-      });
-
+      setState(() { _isUploading = true; });
       File imageFile = File(image.path);
-
-      // 3. Upload to Supabase Storage
       String? downloadUrl = await _supabaseStorage.uploadTicketMedia(
         widget.ticketId,
         imageFile,
       );
-
-      // 4. Update Firestore with Supabase URL
       if (downloadUrl != null) {
         await _ticketService.completeTicketWithMedia(
           widget.ticketId,
@@ -105,33 +96,49 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Image uploaded successfully!')),
           );
-          Navigator.pop(context); // Go back to the dashboard
+          Navigator.pop(context);
         }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Error uploading image.')),
         );
       }
-
-      if (mounted)
-        setState(() {
-          _isUploading = false;
-        });
+      if (mounted) setState(() { _isUploading = false; });
     }
   }
 
-  // --- (Skipped Feature) Location Sharing ---
+  // --- (IMPLEMENTED) Location Sharing ---
   Future<void> _startLocationSharing() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Maps API not configured. Feature unavailable.'),
-        backgroundColor: Colors.red,
-      ),
-    );
+    var status = await Permission.location.request();
+    if (status.isDenied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location permission is required.')),
+      );
+      return;
+    }
+
+    await _location.changeSettings(accuracy: LocationAccuracy.high);
+    // Start listening for location changes
+    _locationSubscription =
+        _location.onLocationChanged.listen((LocationData newLocation) {
+          // Send each new location to Supabase
+          _locationService.updateSenderLocation(widget.ticketId, newLocation);
+        });
+    setState(() { _isLocationSharing = true; });
   }
 
   Future<void> _stopLocationSharing() async {
-    // This is just a placeholder
+    // Stop listening
+    _locationSubscription?.cancel();
+    // Mark the ticket as 'completed' in Firestore
+    await _ticketService.completeTicket(widget.ticketId);
+    setState(() { _isLocationSharing = false; });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location sharing stopped.')),
+      );
+      Navigator.pop(context);
+    }
   }
 
   // --- (Buggy Feature) Video Streaming ---
@@ -146,7 +153,6 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
       print('SENDER: ICE Connection State: $state');
     };
     _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      print('SENDER: Got ICE candidate: ${candidate.candidate}');
       _signalingService.addCandidate(widget.ticketId, candidate, false);
     };
 
@@ -171,7 +177,6 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
                 data['answer']['sdp'],
                 data['answer']['type'],
               );
-              print('SENDER: Got answer, setting remote description...');
               await _peerConnection?.setRemoteDescription(answer);
             }
           }
@@ -181,7 +186,6 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
         .getCandidateStream(widget.ticketId, false)
         .listen((snapshot) {
       for (var change in snapshot.docChanges) {
-        // This is where the error was
         if (change.type == DocumentChangeType.added) {
           var data = change.doc.data() as Map<String, dynamic>;
           _peerConnection?.addCandidate(RTCIceCandidate(
@@ -216,7 +220,6 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
   Widget _buildTaskWidget() {
     switch (widget.requestType) {
       case 'image_sample':
-      // Show loading indicator or the button
         return _isUploading
             ? const Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -233,18 +236,31 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
         );
 
       case 'location':
-      // ... (Location button code remains the same)
+      // This is now fully functional
         return Column(
           children: [
             ElevatedButton.icon(
               icon: Icon(_isLocationSharing ? Icons.stop : Icons.play_arrow),
               label: Text(_isLocationSharing
                   ? 'Stop Sharing'
-                  : 'Start Sharing Location (Not Configured)'),
+                  : 'Start Sharing Location'),
               onPressed: _isLocationSharing
                   ? _stopLocationSharing
                   : _startLocationSharing,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isLocationSharing ? Colors.red : Colors.green,
+                foregroundColor: Colors.white,
+              ),
             ),
+            if (_isLocationSharing)
+              const Padding(
+                padding: EdgeInsets.only(top: 20),
+                child: Text(
+                  'Now sharing your location live...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.green),
+                ),
+              ),
           ],
         );
 

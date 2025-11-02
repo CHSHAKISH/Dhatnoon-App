@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:dhatnoon_app/services/location_service.dart'; // <-- NEW
 import 'package:dhatnoon_app/services/signaling_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart'; // <-- NEW
+import 'package:latlong2/latlong.dart'; // <-- NEW (part of flutter_map)
 
 class TicketDetailsScreen extends StatelessWidget {
   final String ticketId;
@@ -32,7 +34,6 @@ class TicketDetailsScreen extends StatelessWidget {
           var ticket = snapshot.data!.data() as Map<String, dynamic>;
           String status = ticket['status'];
           String requestType = ticket['requestType'];
-          // This mediaUrl will now come from Supabase
           String? mediaUrl = ticket['mediaUrl'];
 
           return Padding(
@@ -57,7 +58,8 @@ class TicketDetailsScreen extends StatelessWidget {
                     context,
                     status,
                     requestType,
-                    mediaUrl, // Pass the URL to the builder
+                    mediaUrl,
+                    ticketId, // <-- Pass ticketId
                   ),
                 ),
               ],
@@ -70,21 +72,18 @@ class TicketDetailsScreen extends StatelessWidget {
 
   /// Dynamically builds the content widget based on the ticket type and status.
   Widget _buildTicketContent(BuildContext context, String status,
-      String requestType, String? mediaUrl) {
+      String requestType, String? mediaUrl, String ticketId) { // <-- Added ticketId
     // --- (IMPLEMENTED) Image Sample ---
     if (requestType == 'image_sample') {
       if (status == 'completed' && mediaUrl != null) {
-        // If we have a URL, display it
         return ClipRRect(
           borderRadius: BorderRadius.circular(12),
           child: Image.network(
             mediaUrl,
-            // Show a loading spinner while the image downloads
             loadingBuilder: (context, child, loadingProgress) {
               if (loadingProgress == null) return child;
               return const Center(child: CircularProgressIndicator());
             },
-            // Show an error icon if the image fails to load
             errorBuilder: (context, error, stackTrace) {
               return const Icon(Icons.error, size: 50);
             },
@@ -93,18 +92,11 @@ class TicketDetailsScreen extends StatelessWidget {
       }
     }
 
-    // --- (Skipped Feature) Location ---
+    // --- (IMPLEMENTED) Location ---
     if (requestType == 'location') {
       if (status == 'accepted') {
-        return const Center(
-          child: Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Text(
-              'Live location feature was not configured (requires Google Maps SDK billing setup).',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        );
+        // Show the live map viewer
+        return _LocationViewer(ticketId: ticketId);
       }
       if (status == 'completed') {
         return const Center(child: Text('Location sharing has ended.'));
@@ -114,7 +106,6 @@ class TicketDetailsScreen extends StatelessWidget {
     // --- (Buggy Feature) Video Stream ---
     if (requestType == 'video_stream') {
       if (status == 'accepted') {
-        // Show the video player widget
         return _VideoStreamViewer(ticketId: ticketId);
       }
       if (status == 'completed') {
@@ -135,8 +126,71 @@ class TicketDetailsScreen extends StatelessWidget {
   }
 }
 
+// --- NEW WIDGET FOR LIVE LOCATION ---
+class _LocationViewer extends StatefulWidget {
+  final String ticketId;
+  const _LocationViewer({required this.ticketId});
+
+  @override
+  State<_LocationViewer> createState() => _LocationViewerState();
+}
+
+class _LocationViewerState extends State<_LocationViewer> {
+  final LocationService _locationService = LocationService();
+  final MapController _mapController = MapController(); // Controller for flutter_map
+  LatLng? _senderPosition;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Map<String, dynamic>>(
+      stream: _locationService.getSessionStream(widget.ticketId),
+      builder: (context, snapshot) {
+        if (snapshot.hasData && snapshot.data != null) {
+          // We have new location data from Supabase!
+          var data = snapshot.data!;
+          _senderPosition = LatLng(data['lat'], data['lng']);
+
+          // Animate the map to the new position
+          _mapController.move(_senderPosition!, 16.0);
+        }
+
+        return FlutterMap(
+          mapController: _mapController,
+          options: MapOptions(
+            initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629), // Default to India
+            initialZoom: _senderPosition == null ? 4.0 : 16.0,
+          ),
+          children: [
+            // 1. The map background
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.example.dhatnoon_app',
+            ),
+            // 2. The marker for the sender
+            if (_senderPosition != null)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: _senderPosition!,
+                    width: 80,
+                    height: 80,
+                    child: const Icon(
+                      Icons.location_on,
+                      color: Colors.red,
+                      size: 40,
+                    ),
+                  ),
+                ],
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+// --- END OF NEW WIDGET ---
+
 // --- (Buggy Feature) Video Stream Viewer ---
-// This stateful widget manages the WebRTC connection for the Requester.
 class _VideoStreamViewer extends StatefulWidget {
   final String ticketId;
   const _VideoStreamViewer({required this.ticketId});
@@ -155,8 +209,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   final Map<String, dynamic> _iceConfig = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-      {'urls': 'stun:stun.stunprotocol.org:3478'},
     ]
   };
 
@@ -168,16 +220,13 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
 
   Future<void> _initialize() async {
     await _remoteRenderer.initialize();
-
     _peerConnection = await createPeerConnection({
       ..._iceConfig,
       'sdpSemantics': 'unified-plan',
     });
-
     _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
       print('REQUESTER: ICE Connection State: $state');
     };
-
     _peerConnection?.onTrack = (RTCTrackEvent event) {
       if (event.streams.isNotEmpty) {
         print("--- REQUESTER: GOT REMOTE STREAM ---");
@@ -186,39 +235,30 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
         });
       }
     };
-
     _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      print('REQUESTER: Got ICE candidate: ${candidate.candidate}');
-      _signalingService.addCandidate(widget.ticketId, candidate, true); // true = isRequester
+      _signalingService.addCandidate(widget.ticketId, candidate, true);
     };
-
     _sessionSub =
         _signalingService.getSessionStream(widget.ticketId).listen((doc) async {
           if (doc.exists) {
             var data = doc.data() as Map<String, dynamic>;
-
             if (data['offer'] != null &&
                 _peerConnection?.getRemoteDescription() == null) {
               var offer = RTCSessionDescription(
                 data['offer']['sdp'],
                 data['offer']['type'],
               );
-
-              print('REQUESTER: Got offer, setting remote description...');
               await _peerConnection?.setRemoteDescription(offer);
-
               RTCSessionDescription answer = await _peerConnection!.createAnswer();
               await _peerConnection!.setLocalDescription(answer);
               await _signalingService.createAnswer(widget.ticketId, answer);
             }
           }
         });
-
     _candidateSub = _signalingService
         .getCandidateStream(widget.ticketId, true)
         .listen((snapshot) {
       for (var change in snapshot.docChanges) {
-        // This is the typo I fixed (was DocumentChange_Type)
         if (change.type == DocumentChangeType.added) {
           var data = change.doc.data() as Map<String, dynamic>;
           _peerConnection?.addCandidate(RTCIceCandidate(
