@@ -1,24 +1,29 @@
-import 'package:cloud_firestore/cloud_firestore.dart'; // <-- CORRECTED
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:location/location.dart'; // Import the location package
 
 class TicketService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // Get the collection reference for 'tickets'
-  late final CollectionReference _ticketsCollection =
-  _firestore.collection('tickets');
+  final CollectionReference _ticketsCollection =
+  FirebaseFirestore.instance.collection('tickets');
+
+  // --- NEW ---
+  // Create a new collection for live session data
+  final CollectionReference _sessionsCollection =
+  FirebaseFirestore.instance.collection('sessions');
 
   // CREATE: Create a new ticket
   Future<void> createTicket(String requestType) async {
     final User? currentUser = _auth.currentUser;
-    if (currentUser == null) return; // Not logged in
+    if (currentUser == null) return;
 
     await _ticketsCollection.add({
       'requesterId': currentUser.uid,
       'requesterEmail': currentUser.email,
-      'requestType': requestType, // e.g., 'image_sample', 'location'
-      'status': 'pending', // pending -> accepted -> completed
+      'requestType': requestType,
+      'status': 'pending',
       'createdAt': Timestamp.now(),
       'senderId': null,
       'senderEmail': null,
@@ -54,11 +59,34 @@ class TicketService {
     });
   }
 
-  // UPDATE: Mark ticket as complete with the media URL
+  // UPDATE: Mark ticket as complete with the media URL (from skipped Step 3)
   Future<void> completeTicketWithMedia(String ticketId, String mediaUrl) async {
     await _ticketsCollection.doc(ticketId).update({
       'status': 'completed',
-      'mediaUrl': mediaUrl, // Add the new media URL field
+      'mediaUrl': mediaUrl,
+    });
+  }
+
+  // --- NEW FUNCTION (for Location, from skipped Step 4) ---
+  // Update the sender's live location in the 'sessions' collection
+  Future<void> updateSenderLocation(String ticketId, LocationData location) async {
+    await _sessionsCollection.doc(ticketId).set({
+      'lat': location.latitude,
+      'lng': location.longitude,
+      'timestamp': FieldValue.serverTimestamp(), // So the requester knows it's live
+    }, SetOptions(merge: true)); // Creates the doc if it doesn't exist
+  }
+
+  // --- NEW FUNCTION (for Location, from skipped Step 4) ---
+  // Get a stream of the live session data for the requester
+  Stream<DocumentSnapshot> getSessionStream(String ticketId) {
+    return _sessionsCollection.doc(ticketId).snapshots();
+  }
+
+  // --- NEW FUNCTION (for Location/Video, from skipped Step 4) ---
+  Future<void> completeTicket(String ticketId) async {
+    await _ticketsCollection.doc(ticketId).update({
+      'status': 'completed',
     });
   }
 }
