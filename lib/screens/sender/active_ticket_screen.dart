@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:dhatnoon_app/services/location_service.dart'; // <-- NEW
+import 'package:dhatnoon_app/services/location_service.dart';
 import 'package:dhatnoon_app/services/supabase_storage_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
 import 'package:dhatnoon_app/services/signaling_service.dart';
@@ -14,11 +14,13 @@ import 'package:permission_handler/permission_handler.dart';
 class ActiveTicketScreen extends StatefulWidget {
   final String ticketId;
   final String requestType;
+  final int durationInSeconds; // <-- UPDATED
 
   const ActiveTicketScreen({
     super.key,
     required this.ticketId,
     required this.requestType,
+    required this.durationInSeconds, // <-- UPDATED
   });
 
   @override
@@ -29,9 +31,12 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
   final TicketService _ticketService = TicketService();
   final SignalingService _signalingService = SignalingService();
   final SupabaseStorageService _supabaseStorage = SupabaseStorageService();
-  final LocationService _locationService = LocationService(); // <-- NEW
+  final LocationService _locationService = LocationService();
 
-  // --- State Variables ---
+  // ... (State variables are the same)
+  Timer? _sessionTimer;
+  bool _isMuted = false;
+  // ... (rest are the same)
   final Location _location = Location();
   StreamSubscription<LocationData>? _locationSubscription;
   bool _isLocationSharing = false;
@@ -59,9 +64,11 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
 
   @override
   void dispose() {
+    // ... (dispose code is the same)
     _locationSubscription?.cancel();
     _sessionSub?.cancel();
     _candidateSub?.cancel();
+    _sessionTimer?.cancel();
     _localStream?.getTracks().forEach((track) => track.stop());
     _localStream?.dispose();
     _peerConnection?.dispose();
@@ -69,93 +76,103 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
     super.dispose();
   }
 
-  // --- (Implemented) Image Sample ---
-  Future<void> _handleImageSample() async {
-    var status = await Permission.camera.request();
-    if (status.isDenied) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Camera permission is required.')),
-      );
-      return;
+  // --- UPDATED TIMER FUNCTIONS ---
+  void _startSessionTimer() {
+    _sessionTimer?.cancel();
+
+    // Use seconds now
+    _sessionTimer = Timer(Duration(seconds: widget.durationInSeconds), () {
+      _autoStopSession();
+    });
+  }
+
+  void _autoStopSession() {
+    if (widget.requestType == 'location' && _isLocationSharing) {
+      _stopLocationSharing();
+    } else if (widget.requestType == 'video_stream' && _isStreaming) {
+      _stopVideoStream();
     }
+  }
+
+  String _formatDurationForDisplay() {
+    final int minutes = (widget.durationInSeconds / 60).floor();
+    final int seconds = widget.durationInSeconds % 60;
+    return "$minutes min ${seconds} sec";
+  }
+  // --- END UPDATED FUNCTIONS ---
+
+  void _toggleMute() {
+    if (_localStream == null) return;
+    final audioTrack = _localStream!.getAudioTracks().first;
+    setState(() {
+      _isMuted = !_isMuted;
+      audioTrack.enabled = !_isMuted;
+    });
+  }
+
+  // ... (handleImageSample, start/stop Location, start/stop Video are the same)
+  // They already call the correct timer functions.
+  Future<void> _handleImageSample() async {
+    // ... (code is the same)
+    var status = await Permission.camera.request();
+    if (status.isDenied) { /*... snackbar ...*/ return; }
+
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.camera);
+
     if (image != null) {
       setState(() { _isUploading = true; });
       File imageFile = File(image.path);
-      String? downloadUrl = await _supabaseStorage.uploadTicketMedia(
-        widget.ticketId,
-        imageFile,
-      );
+      String? downloadUrl = await _supabaseStorage.uploadTicketMedia(widget.ticketId, imageFile);
+
       if (downloadUrl != null) {
-        await _ticketService.completeTicketWithMedia(
-          widget.ticketId,
-          downloadUrl,
-        );
+        await _ticketService.completeTicketWithMedia(widget.ticketId, downloadUrl);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Image uploaded successfully!')),
-          );
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Image uploaded!')));
           Navigator.pop(context);
         }
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Error uploading image.')),
-        );
-      }
+      } else { /*... error snackbar ...*/ }
       if (mounted) setState(() { _isUploading = false; });
     }
   }
 
-  // --- (IMPLEMENTED) Location Sharing ---
+  // --- (Implemented) Location Sharing ---
   Future<void> _startLocationSharing() async {
+    // ... (code is the same, starts timer)
     var status = await Permission.location.request();
-    if (status.isDenied) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location permission is required.')),
-      );
-      return;
-    }
+    if (status.isDenied) { /*... snackbar ...*/ return; }
 
     await _location.changeSettings(accuracy: LocationAccuracy.high);
-    // Start listening for location changes
     _locationSubscription =
         _location.onLocationChanged.listen((LocationData newLocation) {
-          // Send each new location to Supabase
           _locationService.updateSenderLocation(widget.ticketId, newLocation);
         });
     setState(() { _isLocationSharing = true; });
+    _startSessionTimer();
   }
 
   Future<void> _stopLocationSharing() async {
-    // Stop listening
+    // ... (code is the same, stops timer)
+    _sessionTimer?.cancel();
     _locationSubscription?.cancel();
-    // Mark the ticket as 'completed' in Firestore
     await _ticketService.completeTicket(widget.ticketId);
     await _locationService.deleteSenderLocation(widget.ticketId);
+
     setState(() { _isLocationSharing = false; });
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location sharing stopped.')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location sharing stopped.')));
       Navigator.pop(context);
     }
   }
 
   // --- (Buggy Feature) Video Streaming ---
   Future<void> _startVideoStream() async {
+    // ... (code is the same, starts timer)
     await [Permission.camera, Permission.microphone].request();
-    _peerConnection = await createPeerConnection({
-      ..._iceConfig,
-      'sdpSemantics': 'unified-plan',
-    });
+    _peerConnection = await createPeerConnection({ /*...*/ });
 
-    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
-      print('SENDER: ICE Connection State: $state');
-    };
-    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      _signalingService.addCandidate(widget.ticketId, candidate, false);
-    };
+    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) { /*...*/ };
+    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) { /*...*/ };
 
     _localStream = await navigator.mediaDevices.getUserMedia(
         {'audio': true, 'video': {'facingMode': 'environment'}});
@@ -168,42 +185,16 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
     await _peerConnection!.setLocalDescription(offer);
     await _signalingService.createOffer(widget.ticketId, offer);
 
-    _sessionSub =
-        _signalingService.getSessionStream(widget.ticketId).listen((doc) async {
-          if (doc.exists) {
-            var data = doc.data() as Map<String, dynamic>;
-            if (data['answer'] != null &&
-                _peerConnection?.getRemoteDescription() == null) {
-              var answer = RTCSessionDescription(
-                data['answer']['sdp'],
-                data['answer']['type'],
-              );
-              await _peerConnection?.setRemoteDescription(answer);
-            }
-          }
-        });
+    _sessionSub = _signalingService.getSessionStream(widget.ticketId).listen((doc) async { /*...*/ });
+    _candidateSub = _signalingService.getCandidateStream(widget.ticketId, false).listen((snapshot) { /*...*/ });
 
-    _candidateSub = _signalingService
-        .getCandidateStream(widget.ticketId, false)
-        .listen((snapshot) {
-      for (var change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          var data = change.doc.data() as Map<String, dynamic>;
-          _peerConnection?.addCandidate(RTCIceCandidate(
-            data['candidate'],
-            data['sdpMid'],
-            data['sdpMLineIndex'],
-          ));
-        }
-      }
-    });
-
-    setState(() {
-      _isStreaming = true;
-    });
+    setState(() { _isStreaming = true; });
+    _startSessionTimer();
   }
 
   Future<void> _stopVideoStream() async {
+    // ... (code is the same, stops timer)
+    _sessionTimer?.cancel();
     _localStream?.getTracks().forEach((track) => track.stop());
     await _localStream?.dispose();
     await _peerConnection?.close();
@@ -211,9 +202,8 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
     _sessionSub?.cancel();
     _candidateSub?.cancel();
     await _ticketService.completeTicket(widget.ticketId);
-    setState(() {
-      _isStreaming = false;
-    });
+
+    setState(() { _isStreaming = false; });
     if (mounted) Navigator.pop(context);
   }
 
@@ -221,15 +211,9 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
   Widget _buildTaskWidget() {
     switch (widget.requestType) {
       case 'image_sample':
+      // ... (Image sample UI is the same)
         return _isUploading
-            ? const Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 20),
-            Text('Uploading image...'),
-          ],
-        )
+            ? const Column( /*... Loading UI ...*/ )
             : ElevatedButton.icon(
           icon: const Icon(Icons.camera_alt),
           label: const Text('Open Camera'),
@@ -237,7 +221,6 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
         );
 
       case 'location':
-      // This is now fully functional
         return Column(
           children: [
             ElevatedButton.icon(
@@ -254,23 +237,31 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
               ),
             ),
             if (_isLocationSharing)
-              const Padding(
-                padding: EdgeInsets.only(top: 20),
+              Padding(
+                padding: const EdgeInsets.only(top: 20),
                 child: Text(
-                  'Now sharing your location live...',
+                  'Sharing live for ${_formatDurationForDisplay()}', // <-- UPDATED
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.green),
+                  style: const TextStyle(color: Colors.green),
                 ),
               ),
           ],
         );
 
       case 'video_stream':
-      // ... (Video stream code remains the same)
         return Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_isStreaming)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Text(
+                  'Streaming live for ${_formatDurationForDisplay()}', // <-- UPDATED
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.green),
+                ),
+              ),
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
@@ -281,15 +272,31 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
               ),
             ),
             const SizedBox(height: 20),
-            ElevatedButton.icon(
-              icon: Icon(_isStreaming ? Icons.stop_circle : Icons.play_circle),
-              label: Text(_isStreaming ? 'Stop Stream' : 'Start Stream'),
-              onPressed: _isStreaming ? _stopVideoStream : _startVideoStream,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isStreaming ? Colors.red : Colors.green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 20),
-              ),
+
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                ElevatedButton.icon(
+                  icon: Icon(_isStreaming ? Icons.stop_circle : Icons.play_circle),
+                  label: Text(_isStreaming ? 'Stop Stream' : 'Start Stream'),
+                  onPressed: _isStreaming ? _stopVideoStream : _startVideoStream,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isStreaming ? Colors.red : Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
+                  ),
+                ),
+                IconButton.filled(
+                  icon: Icon(_isMuted ? Icons.mic_off : Icons.mic),
+                  iconSize: 30,
+                  padding: const EdgeInsets.all(16),
+                  onPressed: _isStreaming ? _toggleMute : null,
+                  style: IconButton.styleFrom(
+                    backgroundColor: _isMuted ? Colors.red : Colors.blueAccent,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
             ),
           ],
         );

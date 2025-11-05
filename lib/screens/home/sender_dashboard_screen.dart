@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:dhatnoon_app/services/auth_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // <-- IMPORT THIS
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:dhatnoon_app/screens/sender/active_ticket_screen.dart';
 
@@ -26,12 +26,7 @@ class SenderDashboardScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final TicketService ticketService = TicketService();
     final AuthService authService = AuthService();
-
-    // --- THIS IS THE FIX ---
-    // Get the current user ID directly.
-    // We know the user is logged in because they are on this screen.
     final String currentUserId = FirebaseAuth.instance.currentUser!.uid;
-    // --- END OF FIX ---
 
     return Scaffold(
       appBar: AppBar(
@@ -47,21 +42,18 @@ class SenderDashboardScreen extends StatelessWidget {
         ],
       ),
       body: StreamBuilder<QuerySnapshot>(
-        // --- THIS QUERY IS NOW CORRECT ---
-        // It uses the 'currentUserId' string instead of a Future.
         stream: FirebaseFirestore.instance
             .collection('tickets')
-            .where('senderId', isEqualTo: currentUserId) // Use the direct ID
+            .where('senderId', isEqualTo: currentUserId)
             .where('status', isEqualTo: 'pending')
             .orderBy('createdAt', descending: true)
             .snapshots(),
-        // --- END OF QUERY FIX ---
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
-            print(snapshot.error); // For debugging
+            print(snapshot.error);
             return const Center(child: Text('Something went wrong.'));
           }
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
@@ -77,23 +69,34 @@ class SenderDashboardScreen extends StatelessWidget {
               String ticketId = tickets[index].id;
               String requestType = ticket['requestType'];
 
+              // --- NEW ---
+              // Read duration in seconds, default to 300 (5 min)
+              int durationInSeconds = ticket['durationInSeconds'] ?? 300;
+
+              // Format for display
+              String durationText =
+                  "${(durationInSeconds / 60).floor()} min ${durationInSeconds % 60} sec";
+              // --- END NEW ---
+
               return Card(
                 margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: ListTile(
                   leading: Icon(_getIconForType(requestType)),
                   title:
                   Text(requestType.replaceAll('_', ' ').toUpperCase()),
-                  subtitle: Text('From: ${ticket['requesterEmail']}'),
+                  subtitle: Text('From: ${ticket['requesterEmail']} (For $durationText)'), // Show new text
                   trailing: ElevatedButton(
                     child: const Text('Accept'),
                     onPressed: () {
                       ticketService.acceptTicket(ticketId);
+
                       Navigator.push(
                         context,
                         MaterialPageRoute(
                           builder: (context) => ActiveTicketScreen(
                             ticketId: ticketId,
                             requestType: requestType,
+                            durationInSeconds: durationInSeconds, // <-- Pass seconds
                           ),
                         ),
                       );

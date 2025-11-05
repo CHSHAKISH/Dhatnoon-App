@@ -1,25 +1,25 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:location/location.dart'; // Import the location package
+import 'package:location/location.dart';
 
+/// Service class to manage all Firestore operations related to tickets and sessions.
 class TicketService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   final CollectionReference _ticketsCollection =
   FirebaseFirestore.instance.collection('tickets');
-
-  // --- NEW ---
-  // Create a new collection for live session data
   final CollectionReference _sessionsCollection =
   FirebaseFirestore.instance.collection('sessions');
 
-  // CREATE: Create a new ticket
-  // ... (inside the TicketService class)
-
   /// --- UPDATED ---
-  /// Creates a new ticket document with a specific Sender assigned.
-  Future<void> createTicket(String requestType, String senderId, String senderEmail) async {
+  /// Creates a new ticket document with a specific Sender and duration.
+  Future<void> createTicket(
+      String requestType,
+      String senderId,
+      String senderEmail,
+      int durationInSeconds, // <-- NEW
+      ) async {
     final User? currentUser = _auth.currentUser;
     if (currentUser == null) return; // Not logged in
 
@@ -27,14 +27,15 @@ class TicketService {
       'requesterId': currentUser.uid,
       'requesterEmail': currentUser.email,
       'requestType': requestType,
-      'status': 'pending', // This is now a direct request to the sender
+      'status': 'pending',
       'createdAt': Timestamp.now(),
-      'senderId': senderId, // <-- NEW
-      'senderEmail': senderEmail, // <-- NEW
+      'senderId': senderId,
+      'senderEmail': senderEmail,
+      'durationInSeconds': durationInSeconds, // <-- NEW
     });
   }
 
-  // READ: Get a stream of tickets for the current requester
+  /// Gets a real-time stream of tickets created by the current user (Requester).
   Stream<QuerySnapshot> getMyTickets() {
     final User? currentUser = _auth.currentUser;
     return _ticketsCollection
@@ -43,51 +44,53 @@ class TicketService {
         .snapshots();
   }
 
-  // READ: Get a stream of all open tickets for any sender
-  Stream<QuerySnapshot> getOpenTickets() {
+  /// Gets a real-time stream of all tickets assigned to the current user (Sender).
+  Stream<QuerySnapshot> getAssignedTickets() {
+    final User? currentUser = _auth.currentUser;
     return _ticketsCollection
+        .where('senderId', isEqualTo: currentUser!.uid)
         .where('status', isEqualTo: 'pending')
         .orderBy('createdAt', descending: true)
         .snapshots();
   }
 
-  // UPDATE: Allow a sender to accept a ticket
+  /// Updates a ticket's status to 'accepted' and assigns it to the current user (Sender).
   Future<void> acceptTicket(String ticketId) async {
     final User? currentUser = _auth.currentUser;
     if (currentUser == null) return;
 
     await _ticketsCollection.doc(ticketId).update({
-      'senderId': currentUser.uid,
-      'senderEmail': currentUser.email,
       'status': 'accepted',
     });
   }
 
-  // UPDATE: Mark ticket as complete with the media URL (from skipped Step 3)
+  /// Updates a ticket's status to 'completed' and saves the media URL.
   Future<void> completeTicketWithMedia(String ticketId, String mediaUrl) async {
     await _ticketsCollection.doc(ticketId).update({
       'status': 'completed',
-      'mediaUrl': mediaUrl, // Add the new media URL field
+      'mediaUrl': mediaUrl,
     });
   }
 
-  // --- NEW FUNCTION (for Location, from skipped Step 4) ---
-  // Update the sender's live location in the 'sessions' collection
-  Future<void> updateSenderLocation(String ticketId, LocationData location) async {
-    await _sessionsCollection.doc(ticketId).set({
-      'lat': location.latitude,
-      'lng': location.longitude,
-      'timestamp': FieldValue.serverTimestamp(), // So the requester knows it's live
-    }, SetOptions(merge: true)); // Creates the doc if it doesn't exist
-  }
-
-  // --- NEW FUNCTION (for Location, from skipped Step 4) ---
-  // Get a stream of the live session data for the requester
-
-  // --- NEW FUNCTION (for Location/Video, from skipped Step 4) ---
+  /// Updates a ticket's status to 'completed'.
   Future<void> completeTicket(String ticketId) async {
     await _ticketsCollection.doc(ticketId).update({
       'status': 'completed',
     });
+  }
+
+  /// (Skipped Feature) Updates the sender's live location in the 'sessions' collection.
+  Future<void> updateSenderLocation(String ticketId, LocationData location) async {
+    await _sessionsCollection.doc(ticketId).set({
+      'lat': location.latitude,
+      'lng': location.longitude,
+      'timestamp': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  /// Gets a real-time stream of a specific session document.
+  Stream<DocumentSnapshot> getSessionStream(String ticketId) {
+    // This is for WebRTC, pointing to Firestore
+    return _firestore.collection('sessions').doc(ticketId).snapshots();
   }
 }

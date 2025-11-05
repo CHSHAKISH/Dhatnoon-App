@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:dhatnoon_app/services/location_service.dart'; // <-- NEW
+import 'package:dhatnoon_app/services/location_service.dart';
 import 'package:dhatnoon_app/services/signaling_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:flutter_map/flutter_map.dart'; // <-- NEW
-import 'package:latlong2/latlong.dart'; // <-- NEW (part of flutter_map)
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
 class TicketDetailsScreen extends StatelessWidget {
   final String ticketId;
@@ -145,14 +145,20 @@ class _LocationViewerState extends State<_LocationViewer> {
     return StreamBuilder<Map<String, dynamic>>(
       stream: _locationService.getSessionStream(widget.ticketId),
       builder: (context, snapshot) {
-        if (snapshot.hasData && snapshot.data != null) {
-          // We have new location data from Supabase!
-          var data = snapshot.data!;
-          _senderPosition = LatLng(data['lat'], data['lng']);
 
-          // Animate the map to the new position
-          _mapController.move(_senderPosition!, 16.0);
+        // --- THIS IS THE FIX ---
+        if (snapshot.hasData && snapshot.data != null) {
+          var data = snapshot.data!;
+          // Check if lat and lng are not null before trying to use them
+          if (data['lat'] != null && data['lng'] != null) {
+            // We have new location data from Supabase!
+            _senderPosition = LatLng(data['lat'], data['lng']);
+
+            // Animate the map to the new position
+            _mapController.move(_senderPosition!, 16.0);
+          }
         }
+        // --- END OF FIX ---
 
         return FlutterMap(
           mapController: _mapController,
@@ -181,6 +187,18 @@ class _LocationViewerState extends State<_LocationViewer> {
                     ),
                   ),
                 ],
+              ),
+            // 3. A helper message if the stream hasn't started
+            if (_senderPosition == null)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  color: Colors.black.withOpacity(0.5),
+                  child: const Text(
+                    'Waiting for sender to start sharing...',
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ),
               ),
           ],
         );
