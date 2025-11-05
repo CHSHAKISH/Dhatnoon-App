@@ -8,6 +8,18 @@ class AuthService {
   // Get the stream of user authentication changes
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
+  // ... (inside the AuthService class)
+
+  /// Gets a stream of all users with the 'sender' role, excluding the current user.
+  Stream<QuerySnapshot> getSendersStream() {
+    final User? currentUser = _auth.currentUser;
+    return _firestore
+        .collection('users')
+        .where('role', isEqualTo: 'sender')
+        .where('uid', isNotEqualTo: currentUser?.uid) // Don't show the user themselves
+        .snapshots();
+  }
+
   // Sign In with Email & Password
   Future<UserCredential?> signInWithEmail(String email, String password) async {
     try {

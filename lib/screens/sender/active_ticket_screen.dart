@@ -132,6 +132,7 @@ class _ActiveTicketScreenState extends State<ActiveTicketScreen> {
     _locationSubscription?.cancel();
     // Mark the ticket as 'completed' in Firestore
     await _ticketService.completeTicket(widget.ticketId);
+    await _locationService.deleteSenderLocation(widget.ticketId);
     setState(() { _isLocationSharing = false; });
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

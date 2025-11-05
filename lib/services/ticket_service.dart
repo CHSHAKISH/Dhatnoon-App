@@ -15,18 +15,22 @@ class TicketService {
   FirebaseFirestore.instance.collection('sessions');
 
   // CREATE: Create a new ticket
-  Future<void> createTicket(String requestType) async {
+  // ... (inside the TicketService class)
+
+  /// --- UPDATED ---
+  /// Creates a new ticket document with a specific Sender assigned.
+  Future<void> createTicket(String requestType, String senderId, String senderEmail) async {
     final User? currentUser = _auth.currentUser;
-    if (currentUser == null) return;
+    if (currentUser == null) return; // Not logged in
 
     await _ticketsCollection.add({
       'requesterId': currentUser.uid,
       'requesterEmail': currentUser.email,
       'requestType': requestType,
-      'status': 'pending',
+      'status': 'pending', // This is now a direct request to the sender
       'createdAt': Timestamp.now(),
-      'senderId': null,
-      'senderEmail': null,
+      'senderId': senderId, // <-- NEW
+      'senderEmail': senderEmail, // <-- NEW
     });
   }
 

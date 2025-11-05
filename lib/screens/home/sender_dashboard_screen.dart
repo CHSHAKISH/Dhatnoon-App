@@ -1,8 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:dhatnoon_app/services/auth_service.dart';
 import 'package:dhatnoon_app/services/ticket_service.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // <-- IMPORT THIS
 import 'package:flutter/material.dart';
-import 'package:dhatnoon_app/screens/sender/active_ticket_screen.dart'; // <-- CORRECTED
+import 'package:dhatnoon_app/screens/sender/active_ticket_screen.dart';
 
 class SenderDashboardScreen extends StatelessWidget {
   const SenderDashboardScreen({super.key});
@@ -26,9 +27,15 @@ class SenderDashboardScreen extends StatelessWidget {
     final TicketService ticketService = TicketService();
     final AuthService authService = AuthService();
 
+    // --- THIS IS THE FIX ---
+    // Get the current user ID directly.
+    // We know the user is logged in because they are on this screen.
+    final String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+    // --- END OF FIX ---
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sender Dashboard'),
+        title: const Text('My Assigned Requests'),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -40,16 +47,25 @@ class SenderDashboardScreen extends StatelessWidget {
         ],
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: ticketService.getOpenTickets(),
+        // --- THIS QUERY IS NOW CORRECT ---
+        // It uses the 'currentUserId' string instead of a Future.
+        stream: FirebaseFirestore.instance
+            .collection('tickets')
+            .where('senderId', isEqualTo: currentUserId) // Use the direct ID
+            .where('status', isEqualTo: 'pending')
+            .orderBy('createdAt', descending: true)
+            .snapshots(),
+        // --- END OF QUERY FIX ---
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
+            print(snapshot.error); // For debugging
             return const Center(child: Text('Something went wrong.'));
           }
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return const Center(child: Text('No open tickets available.'));
+            return const Center(child: Text('You have no new requests.'));
           }
 
           var tickets = snapshot.data!.docs;
@@ -59,7 +75,7 @@ class SenderDashboardScreen extends StatelessWidget {
             itemBuilder: (context, index) {
               var ticket = tickets[index].data() as Map<String, dynamic>;
               String ticketId = tickets[index].id;
-              String requestType = ticket['requestType']; // Get the request type
+              String requestType = ticket['requestType'];
 
               return Card(
                 margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -71,10 +87,7 @@ class SenderDashboardScreen extends StatelessWidget {
                   trailing: ElevatedButton(
                     child: const Text('Accept'),
                     onPressed: () {
-                      // 1. Accept the ticket in Firestore (this still works)
                       ticketService.acceptTicket(ticketId);
-
-                      // 2. Navigate to the new screen to fulfill the request
                       Navigator.push(
                         context,
                         MaterialPageRoute(
